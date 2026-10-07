@@ -1,0 +1,55 @@
+name: whisper
+
+services:
+  whisper:
+    build: .
+    image: whisper:cpu
+    # Drop audio in ./audio; transcripts appear beside it.
+    # ":z" relabels the mount for SELinux hosts, no-op elsewhere.
+    volumes: &mounts
+      - &models models:/cache
+      - &audio ./audio:/audio:z
+
+  # Source-language transcript plus an English translation, each named after
+  # the language it holds. Uses the image whisper builds, so build that first.
+  whisper-bilingual:
+    image: whisper:cpu
+    entrypoint: ["python", "/bilingual.py"]
+    volumes:
+      - *models
+      - *audio
+      # Mounted rather than baked in, so changing it needs no rebuild.
+      - ./bilingual.py:/bilingual.py:ro,z
+
+  # GPU variants: `docker compose run --rm whisper-cuda ...` builds and runs
+  # them on demand; profiles keep them out of a plain `docker compose build`.
+  whisper-cuda:
+    profiles: [cuda]
+    build:
+      context: .
+      args:
+        TORCH_INDEX: ${CUDA_INDEX:-cu130}
+    image: whisper:cuda
+    gpus: all
+    volumes: *mounts
+
+  whisper-rocm:
+    profiles: [rocm]
+    build:
+      context: .
+      args:
+        TORCH_INDEX: ${ROCM_INDEX:-rocm7.2}
+    image: whisper:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    # /dev/kfd and the render nodes belong to the host's "render" group, whose
+    # GID varies by distro: RENDER_GID=$(getent group render | cut -d: -f3)
+    group_add:
+      - video
+      - ${RENDER_GID:-44}   # unset: 44 is video again, a harmless repeat
+    volumes: *mounts
+
+volumes:
+  models:
+    name: whisper-models
